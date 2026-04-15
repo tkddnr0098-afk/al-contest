@@ -103,6 +103,25 @@ def build_editable_input_data() -> dict:
         except Exception as e:
             st.warning(f"ELA 연동 실패: {e}")
 
+    # number_input/selectbox 위젯은 key가 같으면 이전 상태를 유지하므로,
+    # ELA 로드 상태가 바뀌거나 파일이 갱신되면 시나리오 위젯 상태를 강제로 동기화한다.
+    scenario_state_signature = "ela_empty"
+    if ela_loaded:
+        value_signature = int(pd.util.hash_pandas_object(ela_df, index=True).sum())
+        scenario_state_signature = f"ela_loaded:{value_signature}"
+    if st.session_state.get("scenario_widget_signature") != scenario_state_signature:
+        for i, scenario in enumerate(input_data["scenarios"]):
+            st.session_state[f"duration_{i}"] = float(scenario.get("duration_hr", 1.0))
+            st.session_state[f"cont_{i}"] = float(scenario.get("continuous_load_kw", 0.0))
+            st.session_state[f"inter_{i}"] = float(scenario.get("intermittent_load_kw", 0.0))
+            st.session_state[f"aux_{i}"] = float(
+                scenario.get("deck_machinery_load_kw", scenario.get("aux_load_kw", 0.0))
+            )
+            st.session_state[f"prop_{i}"] = float(scenario.get("propulsion_load_kw", 0.0))
+            st.session_state[f"ess_mode_{i}"] = str(scenario.get("ess_mode", "idle"))
+            st.session_state[f"ess_power_{i}"] = float(scenario.get("ess_power_kw", 0.0))
+        st.session_state["scenario_widget_signature"] = scenario_state_signature
+
     st.sidebar.header("System Settings")
 
     system_options = ["conventional", "diesel_electric", "hybrid", "pure_electric"]
@@ -314,6 +333,7 @@ def main() -> None:
         max_value=5.0,
         value=2.0,
         step=0.5,
+        key="main_il_diversity_factor",
     )
 
     if uploaded_file is not None:
