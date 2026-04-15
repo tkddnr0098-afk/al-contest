@@ -7,7 +7,7 @@ DEFAULT_INPUT_DATA = {
         "vessel_type": "Training Ship",
         "revision": "v0.1",
     },
-    "system_type": "hybrid",
+    "system_type": "conventional",
     "scenarios": [
         {
             "name": "Harbour",
