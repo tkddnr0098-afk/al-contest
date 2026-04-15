@@ -31,8 +31,10 @@ def build_input_data_from_ela_result(
         "scenario",
         "duration_hr",
         "continuous_load_kw",
+        "intermittent_load_raw_kw",
         "intermittent_load_kw",
-        "aux_load_kw",
+        "hotel_load_kw",
+        "deck_machinery_load_kw",
         "propulsion_load_kw",
     }
 
@@ -51,8 +53,12 @@ def build_input_data_from_ela_result(
                 "name": str(row["scenario"]),
                 "duration_hr": float(row["duration_hr"]),
                 "continuous_load_kw": float(row["continuous_load_kw"]),
+                "intermittent_load_raw_kw": float(row["intermittent_load_raw_kw"]),
+                "diversity_factor": float(row.get("diversity_factor", 1.0)),
                 "intermittent_load_kw": float(row["intermittent_load_kw"]),
-                "aux_load_kw": float(row["aux_load_kw"]),  # ← 내부는 aux 유지
+                "hotel_load_kw": float(row["hotel_load_kw"]),
+                "deck_machinery_load_kw": float(row["deck_machinery_load_kw"]),
+                "aux_load_kw": float(row["deck_machinery_load_kw"]),  # 내부 계산 호환용
                 "propulsion_load_kw": float(row["propulsion_load_kw"]),
                 "ess_mode": "idle",
                 "ess_power_kw": 0.0,

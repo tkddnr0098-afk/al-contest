@@ -170,6 +170,7 @@ def build_scenario_dataframe(input_data: dict[str, Any]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     gen = input_data["generator_spec"]
     ess = input_data["ess_spec"]
+    generator_enabled = bool(gen.get("enabled", True))
 
     soc = float(ess["soc_init"])
 
@@ -194,18 +195,22 @@ def build_scenario_dataframe(input_data: dict[str, Any]) -> pd.DataFrame:
             ess_discharge_kw=ess_discharge_kw,
         )
 
-        required_gen_count = _compute_required_gen_count(
-            total_load_kw=total_load_kw,
-            unit_rating_kw=float(gen["unit_rating_kw"]),
-            target_load_factor=float(gen["target_load_factor"]),
-            count_installed=int(gen["count_installed"]),
-        )
+        if generator_enabled:
+            required_gen_count = _compute_required_gen_count(
+                total_load_kw=total_load_kw,
+                unit_rating_kw=float(gen["unit_rating_kw"]),
+                target_load_factor=float(gen["target_load_factor"]),
+                count_installed=int(gen["count_installed"]),
+            )
 
-        gen_loading_pct = _compute_gen_loading_pct(
-            total_load_kw=total_load_kw,
-            required_gen_count=required_gen_count,
-            unit_rating_kw=float(gen["unit_rating_kw"]),
-        )
+            gen_loading_pct = _compute_gen_loading_pct(
+                total_load_kw=total_load_kw,
+                required_gen_count=required_gen_count,
+                unit_rating_kw=float(gen["unit_rating_kw"]),
+            )
+        else:
+            required_gen_count = 0
+            gen_loading_pct = 0.0
 
         soc_start = soc
         soc_end = soc
@@ -225,7 +230,11 @@ def build_scenario_dataframe(input_data: dict[str, Any]) -> pd.DataFrame:
                 "scenario": scenario_name,
                 "duration_hr": duration_hr,
                 "continuous_load_kw": continuous,
+                "intermittent_load_raw_kw": float(scenario.get("intermittent_load_raw_kw", intermittent)),
+                "diversity_factor": float(scenario.get("diversity_factor", 1.0)),
                 "intermittent_load_kw": intermittent,
+                "hotel_load_kw": float(scenario.get("hotel_load_kw", continuous + intermittent)),
+                "deck_machinery_load_kw": float(scenario.get("deck_machinery_load_kw", aux)),
                 "hotel_total_kw": continuous + intermittent,
                 "aux_load_kw": aux,
                 "propulsion_load_kw": propulsion,

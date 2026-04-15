@@ -83,9 +83,21 @@ def plot_soc_profile_streamlit(scenario_df: pd.DataFrame) -> None:
 def build_editable_input_data() -> dict:
     input_data = deepcopy(build_input_data_from_dummy(DEFAULT_INPUT_DATA))
 
+    # ELA 업로드 전에는 load 항목 기본값을 0으로 초기화
+    for scenario in input_data["scenarios"]:
+        scenario["continuous_load_kw"] = 0.0
+        scenario["intermittent_load_raw_kw"] = 0.0
+        scenario["diversity_factor"] = 1.0
+        scenario["intermittent_load_kw"] = 0.0
+        scenario["hotel_load_kw"] = 0.0
+        scenario["deck_machinery_load_kw"] = 0.0
+        scenario["aux_load_kw"] = 0.0
+        scenario["propulsion_load_kw"] = 0.0
+
     # ELA 결과가 있으면 default 값을 ELA 값으로 덮어쓰기
     ela_df = st.session_state.get("adapter_handoff_df", None)
-    if ela_df is not None and not ela_df.empty:
+    ela_loaded = ela_df is not None and not ela_df.empty
+    if ela_loaded:
         try:
             input_data = build_input_data_from_ela_result(ela_df, input_data)
         except Exception as e:
@@ -224,6 +236,7 @@ def build_editable_input_data() -> dict:
             value=float(scenario.get("continuous_load_kw", 0.0)),
             step=10.0,
             key=f"cont_{i}",
+            disabled=not ela_loaded,
         )
         scenario["intermittent_load_kw"] = exp.number_input(
             "Intermittent Load (kW)",
@@ -231,25 +244,38 @@ def build_editable_input_data() -> dict:
             value=float(scenario.get("intermittent_load_kw", 0.0)),
             step=10.0,
             key=f"inter_{i}",
+            disabled=not ela_loaded,
         )
 
+        intermittent_raw = float(scenario.get("intermittent_load_raw_kw", scenario["intermittent_load_kw"]))
+        diversity_factor = float(scenario.get("diversity_factor", 1.0))
+        hotel_load_kw = float(scenario.get("hotel_load_kw", scenario["continuous_load_kw"] + scenario["intermittent_load_kw"]))
+        deck_machinery_load_kw = float(scenario.get("deck_machinery_load_kw", scenario.get("aux_load_kw", 0.0)))
+
+        exp.markdown(f"Intermittent Raw: **{intermittent_raw:.1f} kW**")
+        exp.markdown(f"Diversity Factor: **{diversity_factor:.2f}**")
+        exp.markdown(f"Hotel Load: **{hotel_load_kw:.1f} kW**")
+        exp.markdown(f"Deck Machinery Load: **{deck_machinery_load_kw:.1f} kW**")
         exp.markdown(
             f"Hotel Total: **{scenario['continuous_load_kw'] + scenario['intermittent_load_kw']:.1f} kW**"
         )
 
-        scenario["aux_load_kw"] = exp.number_input(
+        scenario["deck_machinery_load_kw"] = exp.number_input(
             "Deck Mach. Load (kW)",
             min_value=0.0,
-            value=float(scenario.get("aux_load_kw", 0.0)),
+            value=deck_machinery_load_kw,
             step=10.0,
             key=f"aux_{i}",
+            disabled=not ela_loaded,
         )
+        scenario["aux_load_kw"] = scenario["deck_machinery_load_kw"]
         scenario["propulsion_load_kw"] = exp.number_input(
             "Propulsion Load (kW)",
             min_value=0.0,
             value=float(scenario.get("propulsion_load_kw", 0.0)),
             step=10.0,
             key=f"prop_{i}",
+            disabled=not ela_loaded,
         )
 
         ess_mode_options = ["idle", "charge", "discharge"]
@@ -282,10 +308,17 @@ def main() -> None:
     st.subheader("📂 ELA Upload")
 
     uploaded_file = st.file_uploader("Upload ELA Excel", type=["xlsx", "xls"])
+    il_df = st.number_input(
+        "I.L Diversity Factor",
+        min_value=1.0,
+        max_value=5.0,
+        value=2.0,
+        step=0.5,
+    )
 
     if uploaded_file is not None:
         try:
-            _, _, _, _, _, adapter_handoff_df = parse_ela_excel(uploaded_file)
+            _, _, _, _, _, adapter_handoff_df = parse_ela_excel(uploaded_file, il_df=il_df)
 
             # 🔥 핵심: 세션에 저장
             st.session_state["adapter_handoff_df"] = adapter_handoff_df
@@ -297,6 +330,9 @@ def main() -> None:
 
         except Exception as e:
             st.error(f"ELA parsing error: {e}")
+    else:
+        st.session_state["adapter_handoff_df"] = pd.DataFrame()
+        st.info("ELA 파일 업로드 전에는 Scenario Load 값이 0으로 표시됩니다.")
     
     st.caption("Scenario-based load, generator loading, and ESS SOC prototype")
 
