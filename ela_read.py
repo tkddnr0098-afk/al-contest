@@ -2,8 +2,6 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 
-st.set_page_config(page_title="Marine Electrical Studio", layout="wide")
-
 
 # =========================================================
 # Helpers
@@ -588,23 +586,29 @@ def run_app_bridge():
     )
 
 
-# =========================================================
-# Main Menu
-# =========================================================
-if "page" not in st.session_state:
-    st.session_state.page = "Calculator"
+def main() -> None:
+    st.set_page_config(page_title="Marine Electrical Studio", layout="wide")
 
-with st.sidebar:
-    st.title("🚢 Main Menu")
-
-    if st.button("📊 Load Calculator (Excel)", use_container_width=True):
+    # =========================================================
+    # Main Menu
+    # =========================================================
+    if "page" not in st.session_state:
         st.session_state.page = "Calculator"
 
-    if st.button("🔗 App.py Integration", use_container_width=True):
-        st.session_state.page = "Bridge"
+    with st.sidebar:
+        st.title("🚢 Main Menu")
 
-if st.session_state.page == "Calculator":
-    run_load_calculator()
+        if st.button("📊 Load Calculator (Excel)", use_container_width=True):
+            st.session_state.page = "Calculator"
 
-elif st.session_state.page == "Bridge":
-    run_app_bridge()
+        if st.button("🔗 App.py Integration", use_container_width=True):
+            st.session_state.page = "Bridge"
+
+    if st.session_state.page == "Calculator":
+        run_load_calculator()
+    elif st.session_state.page == "Bridge":
+        run_app_bridge()
+
+
+if __name__ == "__main__":
+    main()

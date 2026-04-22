@@ -8,11 +8,7 @@ import streamlit as st
 
 from ela_read import parse_ela_excel
 from adapters import build_input_data_from_dummy, build_input_data_from_ela_result
-from calc_engine import (
-    build_generator_loading_dataframe,
-    build_scenario_dataframe,
-    build_summary_metrics,
-)
+from calc_engine import build_scenario_dataframe
 from config import DEFAULT_INPUT_DATA
 
 
@@ -20,63 +16,14 @@ st.set_page_config(page_title="Power System Scenario Profile Tool", layout="wide
 
 
 def plot_load_profile_streamlit(scenario_df: pd.DataFrame) -> None:
-    x = scenario_df["scenario"]
+    x = scenario_df["scenario"].astype(str)
+    y = scenario_df["total_load_kw"]
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.stackplot(
-        x,
-        scenario_df["continuous_load_kw"],
-        scenario_df["intermittent_load_kw"],
-        scenario_df["aux_load_kw"],
-        scenario_df["propulsion_load_kw"],
-        labels=["Continuous", "Intermittent", "Aux", "Propulsion"],
-    )
-    ax.plot(x, scenario_df["total_load_kw"], marker="o", label="Total Load")
-    ax.set_title("Scenario Load Profile")
+    bars = ax.bar(x, y, color="#1f77b4")
+    ax.bar_label(bars, labels=[f"{value:.1f}" for value in y], padding=3, fontsize=9)
+    ax.set_title("Load Profile")
     ax.set_ylabel("kW")
-    ax.legend()
-    fig.tight_layout()
-    st.pyplot(fig)
-
-
-def plot_generator_loading_streamlit(
-    generator_loading_df: pd.DataFrame,
-    target_lf_pct: float = 80.0,
-    absolute_max_pct: float = 100.0,
-) -> None:
-    if generator_loading_df.empty:
-        st.info("Generator loading data is empty.")
-        return
-
-    pivot_df = (
-        generator_loading_df
-        .pivot(index="scenario", columns="generator", values="loading_pct")
-        .fillna(0.0)
-    )
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    pivot_df.plot(kind="bar", ax=ax)
-    ax.axhline(target_lf_pct, linestyle="--", label=f"Target LF {target_lf_pct:.0f}%")
-    ax.axhline(absolute_max_pct, linestyle="--", label=f"Absolute Max {absolute_max_pct:.0f}%")
-    ax.set_title("Generator Loading Profile")
-    ax.set_ylabel("Load Factor (%)")
-    ax.legend()
-    fig.tight_layout()
-    st.pyplot(fig)
-
-
-def plot_soc_profile_streamlit(scenario_df: pd.DataFrame) -> None:
-    if "soc_start_pct" not in scenario_df.columns or "soc_end_pct" not in scenario_df.columns:
-        st.info("SOC data not found.")
-        return
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(scenario_df["scenario"], scenario_df["soc_start_pct"], marker="o", label="SOC Start")
-    ax.plot(scenario_df["scenario"], scenario_df["soc_end_pct"], marker="o", label="SOC End")
-    ax.set_title("ESS SOC Profile")
-    ax.set_ylabel("SOC (%)")
-    ax.set_ylim(0, 100)
-    ax.legend()
     fig.tight_layout()
     st.pyplot(fig)
 
@@ -111,7 +58,6 @@ def build_editable_input_data() -> dict:
         scenario_state_signature = f"ela_loaded:{value_signature}"
     if st.session_state.get("scenario_widget_signature") != scenario_state_signature:
         for i, scenario in enumerate(input_data["scenarios"]):
-            st.session_state[f"duration_{i}"] = float(scenario.get("duration_hr", 1.0))
             st.session_state[f"cont_{i}"] = float(scenario.get("continuous_load_kw", 0.0))
             st.session_state[f"inter_{i}"] = float(scenario.get("intermittent_load_kw", 0.0))
             st.session_state[f"aux_{i}"] = float(
@@ -135,19 +81,7 @@ def build_editable_input_data() -> dict:
     is_pure_electric = input_data["system_type"] == "pure_electric"
 
     st.sidebar.subheader("Generator")
-
-    if is_pure_electric:
-        generator_enabled = st.sidebar.checkbox(
-            "Generator Enabled",
-            value=False,
-            disabled=True,
-        )
-    else:
-        generator_enabled = st.sidebar.checkbox(
-            "Generator Enabled",
-            value=True,
-        )
-
+    generator_enabled = not is_pure_electric
     input_data["generator_spec"]["enabled"] = generator_enabled
 
     input_data["generator_spec"]["unit_rating_kw"] = st.sidebar.number_input(
@@ -174,20 +108,8 @@ def build_editable_input_data() -> dict:
     )
 
     st.sidebar.subheader("ESS")
-
-    if is_conventional:
-        input_data["ess_spec"]["enabled"] = False
-        ess_enabled = st.sidebar.checkbox(
-            "ESS Enabled",
-            value=False,
-            disabled=True,
-        )
-    else:
-        ess_enabled = st.sidebar.checkbox(
-            "ESS Enabled",
-            value=bool(input_data["ess_spec"]["enabled"]),
-        )
-        input_data["ess_spec"]["enabled"] = ess_enabled
+    ess_enabled = not is_conventional
+    input_data["ess_spec"]["enabled"] = ess_enabled
 
     input_data["ess_spec"]["capacity_kwh"] = st.sidebar.number_input(
         "ESS Capacity (kWh)",
@@ -239,14 +161,6 @@ def build_editable_input_data() -> dict:
 
     for i, scenario in enumerate(input_data["scenarios"]):
         exp = st.sidebar.expander(f"Scenario {i+1} - {scenario['name']}", expanded=False)
-
-        scenario["duration_hr"] = exp.number_input(
-            "Duration (hr)",
-            min_value=0.1,
-            value=float(scenario["duration_hr"]),
-            step=0.1,
-            key=f"duration_{i}",
-        )
 
         exp.markdown("**Hotel Load (kW)**")
         scenario["continuous_load_kw"] = exp.number_input(
@@ -346,7 +260,8 @@ def main() -> None:
             st.success("ELA loaded successfully")
 
             # 확인용 (선택)
-            st.dataframe(adapter_handoff_df, use_container_width=True)
+            display_df = adapter_handoff_df.drop(columns=["duration_hr"], errors="ignore")
+            st.dataframe(display_df, use_container_width=True)
 
         except Exception as e:
             st.error(f"ELA parsing error: {e}")
@@ -354,54 +269,19 @@ def main() -> None:
         st.session_state["adapter_handoff_df"] = pd.DataFrame()
         st.info("ELA 파일 업로드 전에는 Scenario Load 값이 0으로 표시됩니다.")
     
-    st.caption("Scenario-based load, generator loading, and ESS SOC prototype")
+    st.caption("Scenario-based load profile prototype")
 
     input_data = build_editable_input_data()
 
     try:
         scenario_df = build_scenario_dataframe(input_data)
 
-        generator_enabled = input_data["generator_spec"].get("enabled", True)
-
-        if generator_enabled:
-            generator_loading_df = build_generator_loading_dataframe(
-                scenario_df=scenario_df,
-                unit_rating_kw=float(input_data["generator_spec"]["unit_rating_kw"]),
-            )
-        else:
-            generator_loading_df = pd.DataFrame()
-
-        summary = build_summary_metrics(input_data, scenario_df)
-        
     except Exception as exc:
         st.error(f"Calculation error: {exc}")
         st.stop()
 
-    st.subheader("Summary Metrics")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("System Type", summary["system_type"])
-    c2.metric("Scenario Count", summary["scenario_count"])
-    c3.metric("Max Total Load (kW)", f"{summary['max_total_load_kw']:.1f}")
-    c4.metric("Avg Gen LF (%)", f"{summary['avg_gen_loading_pct']:.1f}")
-    c5.metric("Max Required DG", f"{summary['max_required_gen_count']}")
-
-    st.subheader("Scenario Data")
-    st.dataframe(scenario_df, use_container_width=True)
-
     st.subheader("Load Profile")
     plot_load_profile_streamlit(scenario_df)
-
-    if input_data["generator_spec"].get("enabled", True):
-        st.subheader("Generator Loading Profile")
-        plot_generator_loading_streamlit(
-            generator_loading_df,
-            target_lf_pct=float(input_data["generator_spec"]["target_load_factor"]) * 100.0,
-            absolute_max_pct=float(input_data["generator_spec"]["absolute_max_lf"]) * 100.0,
-        )
-
-    if input_data["system_type"] in {"hybrid", "pure_electric"} and input_data["ess_spec"]["enabled"]:
-        st.subheader("ESS SOC Profile")
-        plot_soc_profile_streamlit(scenario_df)
 
 
 if __name__ == "__main__":
