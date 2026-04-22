@@ -32,10 +32,22 @@ def plot_load_profile_streamlit(scenario_df: pd.DataFrame) -> None:
         ax.bar(x, values, bottom=bottom, label=label, color=color)
         bottom += values
 
-    total_load = scenario_df["total_load_kw"].astype(float)
-    ax.plot(x, total_load, marker="o", color="black", linewidth=1.5, label="Total Load")
-    for idx, value in enumerate(total_load):
-        ax.text(idx, value + 0.5, f"{value:.1f}", ha="center", va="bottom", fontsize=9)
+    for idx, (_, row) in enumerate(scenario_df.iterrows()):
+        cumulative = 0.0
+        for _, col, _ in stacked_series:
+            value = float(row[col])
+            if value > 0:
+                ax.text(
+                    idx,
+                    cumulative + (value / 2.0),
+                    f"{value:.1f}",
+                    ha="center",
+                    va="center",
+                    fontsize=11,
+                    color="white",
+                    fontweight="bold",
+                )
+            cumulative += value
 
     ax.set_title("Load Profile")
     ax.set_ylabel("kW")
@@ -114,8 +126,64 @@ def render_voyage_scenario_planner(available_scenarios: list[str]) -> None:
             st.session_state["voyage_rows"].pop(idx)
             st.rerun()
 
-    if st.button("발전기 및 ESS 배터리 적정 용량 산정", key="size_generator_ess"):
-        st.info("향후 계산 로직 및 그래프를 이 영역에 추가할 예정입니다.")
+    left_col, right_col = st.columns([4, 2])
+    with right_col:
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stButton"] button[kind="secondary"] {
+                font-size: 1.05rem;
+                padding: 0.5rem 1rem;
+                font-weight: 600;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("발전기 및 ESS 배터리 적정 용량 산정", key="size_generator_ess", use_container_width=True):
+            main_df = st.session_state.get("main_df", pd.DataFrame())
+            ela_meta = st.session_state.get("ela_meta", {})
+
+            if main_df.empty:
+                st.warning("ELA 파일을 먼저 업로드해주세요.")
+                return
+
+            consumer_col = ela_meta.get("consumer_col", "ELEC. CONSUMER")
+            output_col = ela_meta.get("output_col", "OUTPUT(KW)")
+            qty_col = ela_meta.get("qty_col", "Q'TY")
+            working_col = ela_meta.get("working_col", "WORKING")
+            modes = ela_meta.get("modes", [])
+
+            source_input_col = "INPUT_USED" if "INPUT_USED" in main_df.columns else ela_meta.get("input_col", "INPUT(KW)")
+            if source_input_col not in main_df.columns:
+                st.warning("input load 컬럼을 찾을 수 없습니다.")
+                return
+
+            top5_df = main_df.copy()
+            top5_df[source_input_col] = pd.to_numeric(top5_df[source_input_col], errors="coerce").fillna(0.0)
+            top5_df = top5_df.nlargest(5, source_input_col)
+
+            result_df = pd.DataFrame(
+                {
+                    "electric consumer": top5_df[consumer_col].astype(str),
+                    "output": pd.to_numeric(top5_df[output_col], errors="coerce").fillna(0.0).round(2),
+                    "q'ty": pd.to_numeric(top5_df[qty_col], errors="coerce").fillna(0).astype(int),
+                    "working": pd.to_numeric(top5_df[working_col], errors="coerce").fillna(0).astype(int),
+                    "input load": top5_df[source_input_col].round(2),
+                }
+            )
+
+            for mode in modes:
+                cl_col = f"{mode}_CL"
+                il_col = f"{mode}_IL"
+                cl_values = pd.to_numeric(top5_df.get(cl_col, 0), errors="coerce").fillna(0.0)
+                il_values = pd.to_numeric(top5_df.get(il_col, 0), errors="coerce").fillna(0.0)
+                result_df[f"{mode} load"] = [f"C.L:{cl:.2f} / I.L:{il:.2f}" for cl, il in zip(cl_values, il_values)]
+
+            result_df["권장 기동 방식"] = ""
+
+            st.subheader("Top 5 개별 부하 (input load 기준)")
+            st.dataframe(result_df, use_container_width=True)
 
 
 def main() -> None:
@@ -135,10 +203,12 @@ def main() -> None:
 
     if uploaded_file is not None:
         try:
-            _, _, _, _, _, adapter_handoff_df = parse_ela_excel(uploaded_file, il_df=il_df)
+            _, main_df, _, meta, _, adapter_handoff_df = parse_ela_excel(uploaded_file, il_df=il_df)
 
             # 🔥 핵심: 세션에 저장
             st.session_state["adapter_handoff_df"] = adapter_handoff_df
+            st.session_state["main_df"] = main_df
+            st.session_state["ela_meta"] = meta
 
             st.success("ELA loaded successfully")
 
@@ -167,6 +237,7 @@ def main() -> None:
     render_voyage_scenario_planner(available_scenarios)
 
     st.subheader("Load Profile")
+    st.dataframe(scenario_df, use_container_width=True)
     plot_load_profile_streamlit(scenario_df)
 
 
