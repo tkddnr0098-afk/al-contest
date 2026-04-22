@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import re
 
 
 # =========================================================
@@ -65,10 +66,6 @@ def build_mode_summary(df: pd.DataFrame, modes: list[str], il_df: float) -> pd.D
 
 
 def build_step1_checklist() -> pd.DataFrame:
-    """
-    1단계 작업용 체크리스트
-    - ela_read.py의 출력 계약을 먼저 고정하기 위한 확인표
-    """
     rows = [
         {
             "Step": 1,
@@ -110,9 +107,6 @@ def build_step1_checklist() -> pd.DataFrame:
 
 
 def build_adapter_handoff_table(df: pd.DataFrame, modes: list[str], il_df: float, default_duration_hr: float = 1.0) -> pd.DataFrame:
-    """
-    adapters.py에 넘길 표준 요약 테이블 생성
-    """
     rows = []
     if df is None or df.empty:
         return pd.DataFrame(columns=[
@@ -163,6 +157,184 @@ def build_adapter_handoff_table(df: pd.DataFrame, modes: list[str], il_df: float
 
 
 # =========================================================
+# ELA Parsing Helpers
+# =========================================================
+def _clean_text(value) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).replace("\n", " ").replace("\r", " ").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    if text.upper().startswith("UNNAMED:") or text.upper() == "NAN":
+        return ""
+    return text
+
+
+def _upper_text(value) -> str:
+    return _clean_text(value).upper()
+
+
+def _normalize_mode_name(value) -> str:
+    text = _upper_text(value)
+    if not text:
+        return ""
+
+    text = text.replace("FITGTING", "FIGHTING")
+    text = text.replace("FIRE FITGTING", "FIRE FIGHTING")
+    text = text.replace("HARBOR", "HARBOUR")
+    text = text.replace("ARR./PORT", "ARR_PORT")
+    text = text.replace("&", " ")
+    text = text.replace("/", " ")
+    text = re.sub(r"\bSERVICE\b", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.replace(" ", "_")
+    return text
+
+
+def _normalize_subheader(value) -> str:
+    text = _upper_text(value)
+    text = text.replace(" ", "")
+    if not text:
+        return ""
+    if text in {"%", "L.F", "LF"}:
+        return "%"
+    if "C.L" in text or text.startswith("CL"):
+        return "C.L"
+    if "I.L" in text or text.startswith("IL"):
+        return "I.L"
+    return ""
+
+
+def _find_target_sheet(sheet_names: list[str]) -> str | None:
+    ranked = []
+    for idx, sheet in enumerate(sheet_names):
+        s = sheet.lower().strip()
+        score = -1
+        if s == "anal":
+            score = 100
+        elif "load analysis" in s:
+            score = 90
+        elif "anal" in s:
+            score = 80
+        elif "analysis" in s:
+            score = 70
+        if score >= 0:
+            ranked.append((score, idx, sheet))
+    if not ranked:
+        return None
+    ranked.sort(reverse=True)
+    return ranked[0][2]
+
+
+def _find_header_start(raw_df: pd.DataFrame) -> int:
+    search_rows = min(len(raw_df), 15)
+    for i in range(search_rows):
+        row_vals = [_upper_text(v) for v in raw_df.iloc[i].tolist()]
+        row_text = " | ".join(v for v in row_vals if v)
+        row_compact = row_text.replace(" ", "")
+        if "ELECTRICCONSUMER" in row_compact and "OUTPUT" in row_compact and "WORKING" in row_compact:
+            return i
+    raise ValueError("헤더 시작 행(ELECTRIC CONSUMER/OUTPUT/WORKING 포함)을 찾지 못했습니다.")
+
+
+def _build_columns(raw_df: pd.DataFrame, header_row: int):
+    row1 = raw_df.iloc[header_row]
+    row2 = raw_df.iloc[header_row + 1] if header_row + 1 < len(raw_df) else pd.Series(dtype=object)
+    row3 = raw_df.iloc[header_row + 2] if header_row + 2 < len(raw_df) else pd.Series(dtype=object)
+
+    columns = []
+    modes = []
+    mode_cols = {}
+    cl_cols = {}
+    il_cols = {}
+
+    working_idx = None
+    pt_idx = None
+
+    for col_idx in range(raw_df.shape[1]):
+        h1 = _upper_text(row1.iloc[col_idx])
+        h1_compact = h1.replace(" ", "")
+        if working_idx is None and "WORK" in h1_compact:
+            working_idx = col_idx
+        if pt_idx is None and h1_compact == "PT":
+            pt_idx = col_idx
+
+    current_mode = ""
+
+    for col_idx in range(raw_df.shape[1]):
+        h1 = _upper_text(row1.iloc[col_idx])
+        h2 = _upper_text(row2.iloc[col_idx])
+        h3 = _upper_text(row3.iloc[col_idx])
+        h1_compact = h1.replace(" ", "")
+
+        name = ""
+        if "ELECTRICCONSUMER" in h1_compact:
+            name = "ELEC. CONSUMER"
+        elif "OUTPUT" in h1_compact:
+            name = "OUTPUT(KW)"
+        elif "INPUT" in h1_compact:
+            name = "INPUT(KW)"
+        elif "Q" in h1_compact and "TY" in h1_compact:
+            name = "Q'TY"
+        elif "WORK" in h1_compact:
+            name = "WORKING"
+        elif h1_compact == "PT":
+            name = "PT"
+        elif working_idx is not None and col_idx > working_idx and (pt_idx is None or col_idx < pt_idx):
+            mode = _normalize_mode_name(h2)
+            sub = _normalize_subheader(h3)
+
+            # mode명이 첫 열에만 있고 옆 C.L / I.L 셀은 비어 있는 경우가 많으므로
+            # 직전 mode를 옆 열들에 이어서 적용한다.
+            if mode:
+                current_mode = mode
+            else:
+                mode = current_mode
+
+            if mode and sub:
+                name = f"{mode}_{sub}"
+                if mode not in modes:
+                    modes.append(mode)
+                if sub == "%":
+                    mode_cols[mode] = name
+                elif sub == "C.L":
+                    cl_cols[mode] = name
+                elif sub == "I.L":
+                    il_cols[mode] = name
+
+        columns.append(name)
+
+    # 중복 빈 컬럼/중복 이름 처리
+    counts = {}
+    deduped = []
+    for name in columns:
+        counts[name] = counts.get(name, 0) + 1
+        if name == "":
+            deduped.append(f"__EMPTY_{counts[name]}")
+        elif columns.count(name) > 1 and name not in {"ELEC. CONSUMER", "OUTPUT(KW)", "INPUT(KW)", "Q'TY", "WORKING", "PT"}:
+            deduped.append(f"{name}__{counts[name]}")
+        else:
+            deduped.append(name)
+
+    # dedupe suffix 제거 후 매핑 재작성
+    final_mode_cols = {}
+    final_cl_cols = {}
+    final_il_cols = {}
+    for name in deduped:
+        base = name.split("__")[0]
+        for mode in modes:
+            if base == f"{mode}_%" and mode not in final_mode_cols:
+                final_mode_cols[mode] = name
+            elif base == f"{mode}_C.L" and mode not in final_cl_cols:
+                final_cl_cols[mode] = name
+            elif base == f"{mode}_I.L" and mode not in final_il_cols:
+                final_il_cols[mode] = name
+
+    return deduped, modes, final_mode_cols, final_cl_cols, final_il_cols
+
+
+# =========================================================
 # ELA Parsing / Calculation Core
 # =========================================================
 def parse_ela_excel(file, il_df=2.0):
@@ -177,175 +349,84 @@ def parse_ela_excel(file, il_df=2.0):
     result = {}
     candidates = []
 
+    # 업로드 파일 객체 재사용 대비 포인터 초기화
+    try:
+        file.seek(0)
+    except Exception:
+        pass
+
     xls = pd.ExcelFile(file)
-    target_sheet = None
-
-    for sheet in xls.sheet_names:
-        if "anal" in sheet.lower():
-            target_sheet = sheet
-            break
-
+    target_sheet = _find_target_sheet(xls.sheet_names)
     if target_sheet is None:
-        raise ValueError("'anal' 포함된 시트를 찾을 수 없음")
+        raise ValueError("'Anal' 또는 'Load Analysis' 계열 시트를 찾을 수 없습니다.")
 
-    # 3줄 헤더
-    df = pd.read_excel(file, sheet_name=target_sheet, header=[1, 2, 3])
+    try:
+        file.seek(0)
+    except Exception:
+        pass
+    raw_df = pd.read_excel(file, sheet_name=target_sheet, header=None)
 
-    # -----------------------------------------
-    # 헤더 재구성 규칙
-    # 1열(인덱스 0) : 버림
-    # 2~6열(인덱스 1~5), 22열(인덱스 21) : 첫 번째 헤더 사용(표준명 정리)
-    # 7~21열(인덱스 6~20) : 두 번째 헤더 첫 단어 + 세 번째 헤더 첫 3글자
-    # mode는 7~21열의 두 번째 헤더에서 동적으로 추출
-    # -----------------------------------------
-    def clean_text(x):
-        if pd.isna(x):
-            return ""
-        x = str(x).replace("\n", " ").replace("\r", " ").strip().upper()
-        if x.startswith("UNNAMED:") or x == "NAN":
-            return ""
-        return x
+    header_row = _find_header_start(raw_df)
+    columns, modes, mode_cols, cl_cols, il_cols = _build_columns(raw_df, header_row)
 
-    def first_word(x):
-        x = clean_text(x)
-        if not x:
-            return ""
-        return x.split(" ")[0]
-
-    def first_three(x):
-        x = clean_text(x)
-        return x[:3]
-
-    new_columns = []
-    detected_modes = []
-
-    for idx, col in enumerate(df.columns.values):
-        h1, h2, h3 = col
-
-        c1 = clean_text(h1)
-        c2 = clean_text(h2)
-        c3 = clean_text(h3)
-
-        # 1열 버림
-        if idx == 0:
-            new_columns.append("")
-            continue
-
-        # 2~6열 + 22열 : 첫 번째 헤더 사용 + 표준명 정리
-        if 1 <= idx <= 5 or idx == 21:
-            if "ELECTRIC" in c1 and "CONSUMER" in c1:
-                new_columns.append("ELEC. CONSUMER")
-            elif "OUTPUT" in c1:
-                new_columns.append("OUTPUT(KW)")
-            elif "INPUT" in c1:
-                new_columns.append("INPUT(KW)")
-            elif "Q" in c1:
-                new_columns.append("Q'TY")
-            elif "WORK" in c1:
-                new_columns.append("WORKING")
-            elif "PT" in c1:
-                new_columns.append("PT")
-            else:
-                new_columns.append(c1)
-            continue
-
-        # 7~21열 : mode + sub 헤더
-        if 6 <= idx <= 20:
-            mode = first_word(h2)
-            sub3 = first_three(h3)
-
-            if sub3.startswith("%"):
-                sub = "%"
-            elif sub3 == "C.L":
-                sub = "C.L"
-            elif sub3 == "I.L":
-                sub = "I.L"
-            else:
-                sub = ""
-
-            if mode:
-                detected_modes.append(mode)
-
-            if mode and sub:
-                new_columns.append(f"{mode}_{sub}")
-            else:
-                new_columns.append("")
-            continue
-
-        # 나머지는 첫 번째 헤더 사용
-        new_columns.append(c1)
-
-    df.columns = new_columns
-
-    # mode 중복 제거, 순서 유지
-    modes = list(dict.fromkeys([m for m in detected_modes if m]))
-
-    # 중복 컬럼 처리
-    cols = pd.Series(df.columns)
-    for dup_name in cols[cols.duplicated()].unique():
-        dup_idx = cols[cols == dup_name].index.tolist()
-        for n, idx in enumerate(dup_idx, start=1):
-            if dup_name in ["", "PT"]:
-                cols.iloc[idx] = f"{dup_name}__{n}"
-            else:
-                cols.iloc[idx] = dup_name
-    df.columns = cols.tolist()
-
-    def find_col(*keywords):
-        for col in df.columns:
-            clean_col = col.upper()
-            clean_keywords = [k.upper() for k in keywords]
-            if all(k in clean_col for k in clean_keywords):
-                return col
-        return None
+    data_start_row = header_row + 3
+    df = raw_df.iloc[data_start_row:].reset_index(drop=True).copy()
+    df.columns = columns
 
     consumer_col = "ELEC. CONSUMER" if "ELEC. CONSUMER" in df.columns else None
-    input_col = find_col("INPUT")
-    output_col = find_col("OUTPUT")
-    qty_col = find_col("Q")
-    working_col = find_col("WORK")
+    input_col = "INPUT(KW)" if "INPUT(KW)" in df.columns else None
+    output_col = "OUTPUT(KW)" if "OUTPUT(KW)" in df.columns else None
+    qty_col = "Q'TY" if "Q'TY" in df.columns else None
+    working_col = "WORKING" if "WORKING" in df.columns else None
 
     if not all([consumer_col, output_col, qty_col]):
-        raise ValueError("필수 컬럼 부족 (OUTPUT / QTY 필요)")
+        raise ValueError("필수 컬럼 부족 (ELEC. CONSUMER / OUTPUT(KW) / Q'TY 필요)")
 
-    mode_cols = {}
-    cl_cols = {}
-    il_cols = {}
-
-    for mode in modes:
-        mode_cols[mode] = find_col(mode, "%")
-        cl_cols[mode] = find_col(mode, "C.L")
-        il_cols[mode] = find_col(mode, "I.L")
-
-    # 숫자 컬럼 변환
     num_cols = [input_col, output_col, qty_col, working_col] + list(mode_cols.values()) + list(cl_cols.values()) + list(il_cols.values())
-    num_cols = [c for c in num_cols if c]
-
+    num_cols = [c for c in num_cols if c and c in df.columns]
     for col in num_cols:
-        if col in df.columns:
-            if isinstance(df[col], pd.DataFrame):
-                # 같은 이름 컬럼이 여러 개면 첫 번째만 사용
-                df[col] = pd.to_numeric(df[col].iloc[:, 0], errors="coerce")
-            else:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # 유효 행 정리
     df = df[df[consumer_col].notna()].copy()
-    df[consumer_col] = df[consumer_col].astype(str).str.strip()
+    df[consumer_col] = df[consumer_col].astype(str).str.replace("\n", " ", regex=False).str.replace("\r", " ", regex=False).str.strip()
+    df[consumer_col] = df[consumer_col].str.replace(r"\s+", " ", regex=True)
 
-    exclude_keywords = "ELECTRIC CONSUMER|TOTAL|GRAND|SUB|OUTPUT|INPUT|QTY|SERVICE|nan|None"
-    df = df[~df[consumer_col].str.contains(exclude_keywords, na=False, case=False)]
+    # 집계행/구분행 제거
+    # 예:
+    # - SUB TOTAL, SUB TOTAL (1), GRAND TOTAL, TOTAL
+    # - - MACH. PART, - ELECTRIC PART
+    # - LOAD ANALYSIS TABLE, SHEET :
+    exclude_contains_pattern = (
+        r"SUB\s*TOTAL"
+        r"|GRAND\s*TOTAL"
+        r"|^TOTAL$"
+        r"|LOAD\s*ANALYSIS"
+        r"|SHEET\s*:"
+        r"|-\s*.*PART"
+        r"|PREFERENTIAL\s*TRIP\s*LOAD"
+    )
+    df = df[~df[consumer_col].str.contains(exclude_contains_pattern, case=False, na=False, regex=True)]
     df = df[df[consumer_col] != ""]
 
-    # INPUT 보정
+    # 완전히 비어 있는 잔여행 제거
+    keep_cols = [c for c in [consumer_col, input_col, output_col, qty_col, working_col] if c in df.columns]
+    df = df[df[keep_cols].notna().any(axis=1)].copy()
+
+    # INPUT 보정: 입력값 없으면 OUTPUT / 효율 대신 기존 로직 유지(OUTPUT*0.8)
     df["INPUT_USED"] = df[input_col] if input_col else np.nan
     if output_col:
         df.loc[df["INPUT_USED"].isna(), "INPUT_USED"] = df[output_col] * 0.8
 
-    # 부하 분류
+    # Q'TY/WORKING 기본값
+    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(1.0)
+    if working_col:
+        df[working_col] = pd.to_numeric(df[working_col], errors="coerce").fillna(df[qty_col]).fillna(1.0)
+    else:
+        df["WORKING"] = df[qty_col].fillna(1.0)
+        working_col = "WORKING"
+
     df["LOAD_CATEGORY"] = df[consumer_col].apply(classify_load_category)
 
-    # mode별 계산
     for mode in modes:
         percent_col = mode_cols.get(mode)
         cl_col = cl_cols.get(mode)
@@ -354,43 +435,37 @@ def parse_ela_excel(file, il_df=2.0):
         df[f"{mode}_CL"] = 0.0
         df[f"{mode}_IL"] = 0.0
 
-        for row_idx in df.index:
-            percent = df.at[row_idx, percent_col] if percent_col else np.nan
-            if pd.isna(percent):
-                continue
+        if percent_col and percent_col in df.columns:
+            percent_series = pd.to_numeric(df[percent_col], errors="coerce")
+        else:
+            percent_series = pd.Series(np.nan, index=df.index)
 
-            cl_val = df.at[row_idx, cl_col] if cl_col else np.nan
-            il_val = df.at[row_idx, il_col] if il_col else np.nan
+        cl_series = pd.to_numeric(df[cl_col], errors="coerce") if cl_col and cl_col in df.columns else pd.Series(np.nan, index=df.index)
+        il_series = pd.to_numeric(df[il_col], errors="coerce") if il_col and il_col in df.columns else pd.Series(np.nan, index=df.index)
 
-            # 둘 다 직접 입력되어 있으면 일단 둘 다 반영
-            if pd.notna(cl_val):
-                df.at[row_idx, f"{mode}_CL"] = cl_val
+        # 엑셀 직접입력 우선
+        df[f"{mode}_CL"] = cl_series.fillna(0.0)
+        df[f"{mode}_IL"] = il_series.fillna(0.0)
 
-            if pd.notna(il_val):
-                df.at[row_idx, f"{mode}_IL"] = il_val
+        # 둘 다 비어있고 %만 있으면 계산값을 CL로 반영
+        calc_mask = percent_series.notna() & cl_series.isna() & il_series.isna()
+        calc_val = (
+            df["INPUT_USED"].fillna(0.0)
+            * df[working_col].fillna(1.0)
+            * (percent_series.fillna(0.0) / 100.0)
+        )
+        df.loc[calc_mask, f"{mode}_CL"] = calc_val[calc_mask]
 
-            # 둘 다 없을 때만 계산값 사용
-            if pd.isna(cl_val) and pd.isna(il_val):
-                working_val = df.at[row_idx, working_col] if working_col else 1.0
-                input_used = df.at[row_idx, "INPUT_USED"]
-
-                if pd.isna(working_val):
-                    working_val = 1.0
-                if pd.isna(input_used):
-                    input_used = 0.0
-
-                val = input_used * working_val * (percent / 100.0)
-                df.at[row_idx, f"{mode}_CL"] = val
-
-        df[f"{mode}_IL_APPLIED"] = df[f"{mode}_IL"] / il_df
+        df[f"{mode}_IL_APPLIED"] = df[f"{mode}_IL"] / float(il_df)
         df[f"{mode}_TOTAL"] = df[f"{mode}_CL"] + df[f"{mode}_IL_APPLIED"]
-        result[mode] = df[f"{mode}_TOTAL"].sum()
+        result[mode] = float(df[f"{mode}_TOTAL"].fillna(0).sum())
 
     mode_summary_df = build_mode_summary(df, modes, il_df)
     adapter_handoff_df = build_adapter_handoff_table(df, modes, il_df)
 
     meta = {
         "target_sheet": target_sheet,
+        "header_row": header_row,
         "consumer_col": consumer_col,
         "input_col": input_col,
         "output_col": output_col,
@@ -506,7 +581,6 @@ def run_load_calculator():
             for mode in meta.get("modes", []):
                 percent_col = meta.get("mode_cols", {}).get(mode)
 
-                # %는 원본 열 사용, 헤더는 [MODE]_L.F
                 if percent_col in df.columns:
                     display_df[f"{mode}_L.F"] = df[percent_col]
 
@@ -521,12 +595,10 @@ def run_load_calculator():
                 if calc_il_applied_col in df.columns:
                     display_df[f"{mode}_I.L_APPLIED"] = df[calc_il_applied_col]
 
-            # Q'TY, WORKING 정수 표시
             for col in ["Q'TY", "WORKING"]:
                 if col in display_df.columns:
                     display_df[col] = pd.to_numeric(display_df[col], errors="coerce").fillna(0).astype(int)
 
-            # 나머지 숫자: 소수 둘째자리까지
             for col in display_df.columns:
                 if col not in ["Q'TY", "WORKING", consumer_col, "LOAD_CATEGORY"]:
                     if pd.api.types.is_numeric_dtype(display_df[col]):
@@ -552,7 +624,6 @@ def run_app_bridge():
     if not result:
         st.info("먼저 Load Calculator (Excel)에서 ELA를 읽어주세요.")
         return
-
 
     st.subheader("0) 1단계 작업용 체크리스트")
     st.dataframe(build_step1_checklist(), use_container_width=True)
@@ -589,9 +660,6 @@ def run_app_bridge():
 def main() -> None:
     st.set_page_config(page_title="Marine Electrical Studio", layout="wide")
 
-    # =========================================================
-    # Main Menu
-    # =========================================================
     if "page" not in st.session_state:
         st.session_state.page = "Calculator"
 
