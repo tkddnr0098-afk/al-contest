@@ -176,12 +176,23 @@ def render_voyage_scenario_planner(available_scenarios: list[str]) -> None:
             }
         )
 
+        def format_mode_load(cl: float, il: float) -> str:
+            cl_text = f"C.L : {cl:.2f}" if cl != 0 else ""
+            il_text = f"I.L : {il:.2f}" if il != 0 else ""
+            if cl_text and il_text:
+                return f"{cl_text} / {il_text}"
+            if cl_text:
+                return cl_text
+            if il_text:
+                return il_text
+            return "-"
+
         for mode in modes:
             cl_col = f"{mode}_CL"
             il_col = f"{mode}_IL"
             cl_values = pd.to_numeric(top3_df.get(cl_col, 0), errors="coerce").fillna(0.0)
             il_values = pd.to_numeric(top3_df.get(il_col, 0), errors="coerce").fillna(0.0)
-            result_df[f"{mode} load"] = [f"C.L:{cl:.2f} / I.L:{il:.2f}" for cl, il in zip(cl_values, il_values)]
+            result_df[f"{mode} load"] = [format_mode_load(cl, il) for cl, il in zip(cl_values, il_values)]
 
         result_df["권장 기동 방식"] = ""
 
