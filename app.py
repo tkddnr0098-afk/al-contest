@@ -32,22 +32,23 @@ def plot_load_profile_streamlit(scenario_df: pd.DataFrame) -> None:
         ax.bar(x, values, bottom=bottom, label=label, color=color)
         bottom += values
 
-    for idx, (_, row) in enumerate(scenario_df.iterrows()):
-        cumulative = 0.0
-        for _, col, _ in stacked_series:
-            value = float(row[col])
-            if value > 0:
-                ax.text(
-                    idx,
-                    cumulative + (value / 2.0),
-                    f"{value:.1f}",
-                    ha="center",
-                    va="center",
-                    fontsize=11,
-                    color="white",
-                    fontweight="bold",
-                )
-            cumulative += value
+    total_load = bottom.copy()
+    max_total = float(total_load.max()) if len(total_load) else 0.0
+    y_max = max_total * 1.2 if max_total > 0 else 1.0
+    ax.set_ylim(0, y_max)
+
+    for idx, total in enumerate(total_load):
+        if total > 0:
+            ax.text(
+                idx,
+                total + (y_max * 0.01),
+                f"{total:.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=11,
+                color="black",
+                fontweight="bold",
+            )
 
     ax.set_title("Load Profile")
     ax.set_ylabel("kW")
@@ -126,64 +127,67 @@ def render_voyage_scenario_planner(available_scenarios: list[str]) -> None:
             st.session_state["voyage_rows"].pop(idx)
             st.rerun()
 
-    left_col, right_col = st.columns([4, 2])
-    with right_col:
-        st.markdown(
-            """
-            <style>
-            div[data-testid="stButton"] button[kind="secondary"] {
-                font-size: 1.05rem;
-                padding: 0.5rem 1rem;
-                font-weight: 600;
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] button[kind="secondary"] {
+            font-size: 1.05rem;
+            padding: 0.5rem 1rem;
+            font-weight: 600;
+        }
+        .full-width-button {
+            margin: 0 0.25rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="full-width-button">', unsafe_allow_html=True)
+    if st.button("발전기 및 ESS 배터리 적정 용량 산정", key="size_generator_ess", use_container_width=True):
+        main_df = st.session_state.get("main_df", pd.DataFrame())
+        ela_meta = st.session_state.get("ela_meta", {})
+
+        if main_df.empty:
+            st.warning("ELA 파일을 먼저 업로드해주세요.")
+            return
+
+        consumer_col = ela_meta.get("consumer_col", "ELEC. CONSUMER")
+        output_col = ela_meta.get("output_col", "OUTPUT(KW)")
+        qty_col = ela_meta.get("qty_col", "Q'TY")
+        working_col = ela_meta.get("working_col", "WORKING")
+        modes = ela_meta.get("modes", [])
+
+        source_input_col = "INPUT_USED" if "INPUT_USED" in main_df.columns else ela_meta.get("input_col", "INPUT(KW)")
+        if source_input_col not in main_df.columns:
+            st.warning("input load 컬럼을 찾을 수 없습니다.")
+            return
+
+        top3_df = main_df.copy()
+        top3_df[source_input_col] = pd.to_numeric(top3_df[source_input_col], errors="coerce").fillna(0.0)
+        top3_df = top3_df.nlargest(3, source_input_col)
+
+        result_df = pd.DataFrame(
+            {
+                "electric consumer": top3_df[consumer_col].astype(str),
+                "output": pd.to_numeric(top3_df[output_col], errors="coerce").fillna(0.0).round(2),
+                "q'ty": pd.to_numeric(top3_df[qty_col], errors="coerce").fillna(0).astype(int),
+                "working": pd.to_numeric(top3_df[working_col], errors="coerce").fillna(0).astype(int),
+                "input load": top3_df[source_input_col].round(2),
             }
-            </style>
-            """,
-            unsafe_allow_html=True,
         )
-        if st.button("발전기 및 ESS 배터리 적정 용량 산정", key="size_generator_ess", use_container_width=True):
-            main_df = st.session_state.get("main_df", pd.DataFrame())
-            ela_meta = st.session_state.get("ela_meta", {})
 
-            if main_df.empty:
-                st.warning("ELA 파일을 먼저 업로드해주세요.")
-                return
+        for mode in modes:
+            cl_col = f"{mode}_CL"
+            il_col = f"{mode}_IL"
+            cl_values = pd.to_numeric(top3_df.get(cl_col, 0), errors="coerce").fillna(0.0)
+            il_values = pd.to_numeric(top3_df.get(il_col, 0), errors="coerce").fillna(0.0)
+            result_df[f"{mode} load"] = [f"C.L:{cl:.2f} / I.L:{il:.2f}" for cl, il in zip(cl_values, il_values)]
 
-            consumer_col = ela_meta.get("consumer_col", "ELEC. CONSUMER")
-            output_col = ela_meta.get("output_col", "OUTPUT(KW)")
-            qty_col = ela_meta.get("qty_col", "Q'TY")
-            working_col = ela_meta.get("working_col", "WORKING")
-            modes = ela_meta.get("modes", [])
+        result_df["권장 기동 방식"] = ""
 
-            source_input_col = "INPUT_USED" if "INPUT_USED" in main_df.columns else ela_meta.get("input_col", "INPUT(KW)")
-            if source_input_col not in main_df.columns:
-                st.warning("input load 컬럼을 찾을 수 없습니다.")
-                return
-
-            top5_df = main_df.copy()
-            top5_df[source_input_col] = pd.to_numeric(top5_df[source_input_col], errors="coerce").fillna(0.0)
-            top5_df = top5_df.nlargest(5, source_input_col)
-
-            result_df = pd.DataFrame(
-                {
-                    "electric consumer": top5_df[consumer_col].astype(str),
-                    "output": pd.to_numeric(top5_df[output_col], errors="coerce").fillna(0.0).round(2),
-                    "q'ty": pd.to_numeric(top5_df[qty_col], errors="coerce").fillna(0).astype(int),
-                    "working": pd.to_numeric(top5_df[working_col], errors="coerce").fillna(0).astype(int),
-                    "input load": top5_df[source_input_col].round(2),
-                }
-            )
-
-            for mode in modes:
-                cl_col = f"{mode}_CL"
-                il_col = f"{mode}_IL"
-                cl_values = pd.to_numeric(top5_df.get(cl_col, 0), errors="coerce").fillna(0.0)
-                il_values = pd.to_numeric(top5_df.get(il_col, 0), errors="coerce").fillna(0.0)
-                result_df[f"{mode} load"] = [f"C.L:{cl:.2f} / I.L:{il:.2f}" for cl, il in zip(cl_values, il_values)]
-
-            result_df["권장 기동 방식"] = ""
-
-            st.subheader("Top 5 개별 부하 (input load 기준)")
-            st.dataframe(result_df, use_container_width=True)
+        st.subheader("Top 3 개별 부하 (input load 기준)")
+        st.dataframe(result_df, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main() -> None:
@@ -233,12 +237,10 @@ def main() -> None:
         st.error(f"Calculation error: {exc}")
         st.stop()
 
+    st.subheader("Load Profile")
+    plot_load_profile_streamlit(scenario_df)
     available_scenarios = scenario_df["scenario"].astype(str).tolist() if "scenario" in scenario_df.columns else []
     render_voyage_scenario_planner(available_scenarios)
-
-    st.subheader("Load Profile")
-    st.dataframe(scenario_df, use_container_width=True)
-    plot_load_profile_streamlit(scenario_df)
 
 
 if __name__ == "__main__":
