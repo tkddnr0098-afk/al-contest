@@ -17,13 +17,29 @@ st.set_page_config(page_title="Power System Scenario Profile Tool", layout="wide
 
 def plot_load_profile_streamlit(scenario_df: pd.DataFrame) -> None:
     x = scenario_df["scenario"].astype(str)
-    y = scenario_df["total_load_kw"]
+    stacked_series = [
+        ("Continuous", "continuous_load_kw", "#1f77b4"),
+        ("Intermittent", "intermittent_load_kw", "#ff7f0e"),
+        ("Aux", "aux_load_kw", "#2ca02c"),
+        ("Propulsion", "propulsion_load_kw", "#d62728"),
+        ("ESS Charge", "ess_charge_kw", "#9467bd"),
+    ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    bars = ax.bar(x, y, color="#1f77b4")
-    ax.bar_label(bars, labels=[f"{value:.1f}" for value in y], padding=3, fontsize=9)
+    bottom = pd.Series([0.0] * len(scenario_df))
+    for label, col, color in stacked_series:
+        values = scenario_df[col].astype(float)
+        ax.bar(x, values, bottom=bottom, label=label, color=color)
+        bottom += values
+
+    total_load = scenario_df["total_load_kw"].astype(float)
+    ax.plot(x, total_load, marker="o", color="black", linewidth=1.5, label="Total Load")
+    for idx, value in enumerate(total_load):
+        ax.text(idx, value + 0.5, f"{value:.1f}", ha="center", va="bottom", fontsize=9)
+
     ax.set_title("Load Profile")
     ax.set_ylabel("kW")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0)
     fig.tight_layout()
     st.pyplot(fig)
 
@@ -64,7 +80,7 @@ def render_voyage_scenario_planner(available_scenarios: list[str]) -> None:
     )
     st.caption(f"선택된 항차 횟수: {voyage_count}")
 
-    st.markdown("**항차 시나리오 표**")
+    st.markdown("**운항 시나리오 정의**")
     header_mode, header_duration, _ = st.columns([2, 1, 0.5])
     header_mode.markdown("**Mode**")
     header_duration.markdown("**duration_hr**")
@@ -97,6 +113,9 @@ def render_voyage_scenario_planner(available_scenarios: list[str]) -> None:
         if col_action.button("－", key=f"remove_voyage_row_{idx}"):
             st.session_state["voyage_rows"].pop(idx)
             st.rerun()
+
+    if st.button("발전기 및 ESS 배터리 적정 용량 산정", key="size_generator_ess"):
+        st.info("향후 계산 로직 및 그래프를 이 영역에 추가할 예정입니다.")
 
 
 def main() -> None:
