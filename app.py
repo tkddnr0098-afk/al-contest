@@ -19,7 +19,8 @@ def build_generator_capacity_recommendation_df(scenario_df: pd.DataFrame) -> pd.
     if scenario_df is None or scenario_df.empty or "total_load_kw" not in scenario_df.columns:
         return pd.DataFrame()
 
-    peak_row = scenario_df.loc[scenario_df["total_load_kw"].astype(float).idxmax()]
+    peak_row = scenario_df.loc[scenario_df["total_load_kw"].astype(float)
+                               .idxmax()]
     peak_scenario = str(peak_row["scenario"])
     peak_total_load_kw = _safe_float(peak_row["total_load_kw"])
 
@@ -370,14 +371,18 @@ def render_voyage_scenario_planner(
     header_duration.markdown("**duration_hr**")
     header_running_gen.markdown("**running_gen**")
 
-    mode_options = ["NORMAL", "PORT_IN_OUT", "WORKING", "HARBOUR"]
+    default_mode_options = ["NORMAL", "PORT_IN_OUT", "WORKING", "HARBOUR"]
+    mode_options = [str(mode) for mode in available_scenarios if str(mode).strip()]
+    if not mode_options:
+        mode_options = default_mode_options
+    mode_options = [str(mode) for mode in available_scenarios if str(mode).strip()]
+    if not mode_options:
+        mode_options = default_mode_options
     next_voyage_row_id = int(st.session_state.get("next_voyage_row_id", 0))
     if "voyage_rows" not in st.session_state:
         st.session_state["voyage_rows"] = [
-            {"id": 0, "mode": mode_options[0], "duration_hr": 0.0, "running_gen": 0},
-            {"id": 1, "mode": mode_options[1], "duration_hr": 0.0, "running_gen": 0},
-            {"id": 2, "mode": mode_options[2], "duration_hr": 0.0, "running_gen": 0},
-            {"id": 3, "mode": mode_options[3], "duration_hr": 0.0, "running_gen": 0},
+            {"id": idx, "mode": mode_options[idx % len(mode_options)], "duration_hr": 0.0, "running_gen": 0}
+            for idx in range(4)
         ]
         next_voyage_row_id = 4
     for row in st.session_state["voyage_rows"]:
@@ -395,9 +400,13 @@ def render_voyage_scenario_planner(
     for idx, row in enumerate(st.session_state["voyage_rows"]):
         row_id = int(row.get("id", idx))
         col_mode, col_duration, col_running_gen, col_action = st.columns([2, 1, 1, 0.5])
-        row["mode"] = col_mode.text_input(
+        current_mode = str(row.get("mode", mode_options[0]))
+        select_options = mode_options if current_mode in mode_options else [*mode_options, current_mode]
+        current_mode_index = select_options.index(current_mode) if current_mode in select_options else 0
+        row["mode"] = col_mode.selectbox(
             "Mode",
-            value=str(row.get("mode", "")),
+            options=select_options,
+            index=current_mode_index,
             key=f"voyage_mode_{row_id}",
             label_visibility="collapsed",
         )
