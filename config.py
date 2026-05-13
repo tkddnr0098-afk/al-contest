@@ -64,9 +64,6 @@ DEFAULT_INPUT_DATA = {
         "unit_rating_kw": 500.0,
         "count_installed": 3,
         "target_load_factor": 0.80,
-        "min_recommended_lf": 0.30,
-        "max_recommended_lf": 0.85,
-        "absolute_max_lf": 1.00,
     },
     "propulsion_spec": {
         "motor_efficiency": 0.96,

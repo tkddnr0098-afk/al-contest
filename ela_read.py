@@ -123,34 +123,45 @@ def build_adapter_handoff_table(df: pd.DataFrame, modes: list[str], il_df: float
         ])
 
     for mode in modes:
-        continuous_kw = float(df.get(f"{mode}_CL", pd.Series(dtype=float)).fillna(0).sum())
-        intermittent_raw_kw = float(df.get(f"{mode}_IL", pd.Series(dtype=float)).fillna(0).sum())
-        intermittent_kw = float(df.get(f"{mode}_IL_APPLIED", pd.Series(dtype=float)).fillna(0).sum())
+        cl_series = pd.to_numeric(df.get(f"{mode}_CL", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+        il_series = pd.to_numeric(df.get(f"{mode}_IL", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+        il_applied_series = pd.to_numeric(df.get(f"{mode}_IL_APPLIED", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+
+        category_series = (
+            df["LOAD_CATEGORY"]
+            if "LOAD_CATEGORY" in df.columns
+            else pd.Series("hotel", index=df.index)
+        )
+        hotel_mask = category_series == "hotel"
+        deck_mask = category_series == "deck_machinery"
+        propulsion_mask = category_series == "propulsion"
+
+        continuous_kw = float(cl_series[hotel_mask].sum())
+        intermittent_raw_kw = float(il_series[hotel_mask].sum())
+        intermittent_kw = float(il_applied_series[hotel_mask].sum())
         total_kw = float(df.get(f"{mode}_TOTAL", pd.Series(dtype=float)).fillna(0).sum())
 
         propulsion_kw = float(
-            df.loc[df["LOAD_CATEGORY"] == "propulsion", f"{mode}_TOTAL"].fillna(0).sum()
+            df.loc[propulsion_mask, f"{mode}_TOTAL"].fillna(0).sum()
         ) if "LOAD_CATEGORY" in df.columns and f"{mode}_TOTAL" in df.columns else 0.0
 
         deck_machinery_kw = float(
-            df.loc[df["LOAD_CATEGORY"] == "deck_machinery", f"{mode}_TOTAL"].fillna(0).sum()
+            df.loc[deck_mask, f"{mode}_TOTAL"].fillna(0).sum()
         ) if "LOAD_CATEGORY" in df.columns and f"{mode}_TOTAL" in df.columns else 0.0
 
-        hotel_kw = float(
-            df.loc[df["LOAD_CATEGORY"] == "hotel", f"{mode}_TOTAL"].fillna(0).sum()
-        ) if "LOAD_CATEGORY" in df.columns and f"{mode}_TOTAL" in df.columns else 0.0
+        hotel_kw = continuous_kw + intermittent_kw
 
         rows.append({
             "scenario": mode,
-            "continuous_load_kw": round(continuous_kw, 2),
-            "intermittent_load_raw_kw": round(intermittent_raw_kw, 2),
-            "diversity_factor": round(float(il_df), 2),
-            "intermittent_load_kw": round(intermittent_kw, 2),
-            "hotel_load_kw": round(hotel_kw, 2),
-            "deck_machinery_load_kw": round(deck_machinery_kw, 2),
-            "propulsion_load_kw": round(propulsion_kw, 2),
-            "total_load_kw": round(total_kw, 2),
-            "duration_hr": round(float(default_duration_hr), 2),
+            "continuous_load_kw": continuous_kw,
+            "intermittent_load_raw_kw": intermittent_raw_kw,
+            "diversity_factor": float(il_df),
+            "intermittent_load_kw": intermittent_kw,
+            "hotel_load_kw": hotel_kw,
+            "deck_machinery_load_kw": deck_machinery_kw,
+            "propulsion_load_kw": propulsion_kw,
+            "total_load_kw": total_kw,
+            "duration_hr": float(default_duration_hr),
         })
 
     return pd.DataFrame(rows)
@@ -197,11 +208,12 @@ def _normalize_subheader(value) -> str:
     text = text.replace(" ", "")
     if not text:
         return ""
-    if text in {"%", "L.F", "LF"}:
+    compact = re.sub(r"[^A-Z%]", "", text)
+    if text in {"%", "L.F", "LF"} or compact in {"LF", "LF%"} or "LOADFACTOR" in compact:
         return "%"
-    if "C.L" in text or text.startswith("CL"):
+    if "C.L" in text or text.startswith("CL") or "CONTINUOUS" in text:
         return "C.L"
-    if "I.L" in text or text.startswith("IL"):
+    if "I.L" in text or text.startswith("IL") or "INTERMITTENT" in text:
         return "I.L"
     return ""
 
@@ -227,21 +239,113 @@ def _find_target_sheet(sheet_names: list[str]) -> str | None:
     return ranked[0][2]
 
 
+def _compact_text(value) -> str:
+    return re.sub(r"[^A-Z0-9%]", "", _upper_text(value))
+
+
+def _is_consumer_header(compact: str) -> bool:
+    return (
+        "ELECTRICCONSUMER" in compact
+        or "ELECCONSUMER" in compact
+        or ("CONSUMER" in compact and ("ELEC" in compact or "EQUIPMENT" in compact))
+    )
+
+
+def _is_output_header(compact: str) -> bool:
+    return "OUTPUT" in compact or "OUTKW" in compact
+
+
+def _is_input_header(compact: str) -> bool:
+    return "INPUT" in compact or "INKW" in compact
+
+
+def _is_qty_header(compact: str) -> bool:
+    if compact.startswith("WORK"):
+        return False
+    return "QTY" in compact or "QUANTITY" in compact
+
+
+def _is_working_header(compact: str) -> bool:
+    return compact in {"WORKING", "WORK"} or "WORKQTY" in compact or "WORKNO" in compact
+
+
+def _is_pt_header(compact: str) -> bool:
+    return compact == "PT"
+
+
+def _row_compact_text(raw_df: pd.DataFrame, row_idx: int) -> str:
+    row_vals = [_compact_text(v) for v in raw_df.iloc[row_idx].tolist()]
+    return "|".join(v for v in row_vals if v)
+
+
+def _window_compact_text(raw_df: pd.DataFrame, start_row: int, depth: int = 3) -> str:
+    end_row = min(len(raw_df), start_row + depth)
+    values = []
+    for row_idx in range(start_row, end_row):
+        values.extend(_compact_text(v) for v in raw_df.iloc[row_idx].tolist())
+    return "|".join(v for v in values if v)
+
+
+def _header_score(compact_text: str) -> int:
+    score = 0
+    if _is_consumer_header(compact_text):
+        score += 4
+    if _is_output_header(compact_text):
+        score += 2
+    if _is_input_header(compact_text):
+        score += 1
+    if _is_qty_header(compact_text):
+        score += 2
+    if _is_working_header(compact_text):
+        score += 2
+    if any(marker in compact_text for marker in ["CL", "CLOAD", "CONTINUOUS", "IL", "ILOAD", "INTERMITTENT", "LF", "%"]):
+        score += 1
+    return score
+
+
+def _looks_like_header(compact_text: str) -> bool:
+    return (
+        _is_consumer_header(compact_text)
+        and _is_output_header(compact_text)
+        and (_is_qty_header(compact_text) or _is_working_header(compact_text))
+    )
+
+
 def _find_header_start(raw_df: pd.DataFrame) -> int:
-    search_rows = min(len(raw_df), 15)
+    search_rows = min(len(raw_df), 120)
+
     for i in range(search_rows):
-        row_vals = [_upper_text(v) for v in raw_df.iloc[i].tolist()]
-        row_text = " | ".join(v for v in row_vals if v)
-        row_compact = row_text.replace(" ", "")
-        if "ELECTRICCONSUMER" in row_compact and "OUTPUT" in row_compact and "WORKING" in row_compact:
+        row_text = _row_compact_text(raw_df, i)
+        if _looks_like_header(row_text):
             return i
-    raise ValueError("헤더 시작 행(ELECTRIC CONSUMER/OUTPUT/WORKING 포함)을 찾지 못했습니다.")
+
+    best_row = None
+    best_score = -1
+    for i in range(search_rows):
+        window_text = _window_compact_text(raw_df, i, depth=4)
+        if not _looks_like_header(window_text):
+            continue
+
+        score = _header_score(window_text)
+        if score > best_score:
+            best_row = i
+            best_score = score
+
+    if best_row is not None:
+        return best_row
+
+    raise ValueError(
+        "헤더 시작 행(ELEC./ELECTRIC CONSUMER, OUTPUT, Q'TY 또는 WORKING 포함)을 "
+        f"찾지 못했습니다. 상위 {search_rows}행을 확인했습니다."
+    )
 
 
 def _build_columns(raw_df: pd.DataFrame, header_row: int):
     row1 = raw_df.iloc[header_row]
     row2 = raw_df.iloc[header_row + 1] if header_row + 1 < len(raw_df) else pd.Series(dtype=object)
     row3 = raw_df.iloc[header_row + 2] if header_row + 2 < len(raw_df) else pd.Series(dtype=object)
+    row4 = raw_df.iloc[header_row + 3] if header_row + 3 < len(raw_df) else pd.Series(dtype=object)
+    header_rows = [row1, row2, row3, row4]
 
     columns = []
     modes = []
@@ -253,11 +357,10 @@ def _build_columns(raw_df: pd.DataFrame, header_row: int):
     pt_idx = None
 
     for col_idx in range(raw_df.shape[1]):
-        h1 = _upper_text(row1.iloc[col_idx])
-        h1_compact = h1.replace(" ", "")
-        if working_idx is None and "WORK" in h1_compact:
+        header_compact = "".join(_compact_text(row.iloc[col_idx]) for row in header_rows if col_idx < len(row))
+        if working_idx is None and _is_working_header(header_compact):
             working_idx = col_idx
-        if pt_idx is None and h1_compact == "PT":
+        if pt_idx is None and _is_pt_header(header_compact):
             pt_idx = col_idx
 
     current_mode = ""
@@ -266,24 +369,50 @@ def _build_columns(raw_df: pd.DataFrame, header_row: int):
         h1 = _upper_text(row1.iloc[col_idx])
         h2 = _upper_text(row2.iloc[col_idx])
         h3 = _upper_text(row3.iloc[col_idx])
-        h1_compact = h1.replace(" ", "")
+        h4 = _upper_text(row4.iloc[col_idx])
+        header_compact = "".join(_compact_text(row.iloc[col_idx]) for row in header_rows if col_idx < len(row))
 
         name = ""
-        if "ELECTRICCONSUMER" in h1_compact:
+        if _is_consumer_header(header_compact):
             name = "ELEC. CONSUMER"
-        elif "OUTPUT" in h1_compact:
+        elif _is_output_header(header_compact):
             name = "OUTPUT(KW)"
-        elif "INPUT" in h1_compact:
+        elif _is_input_header(header_compact):
             name = "INPUT(KW)"
-        elif "Q" in h1_compact and "TY" in h1_compact:
+        elif _is_qty_header(header_compact):
             name = "Q'TY"
-        elif "WORK" in h1_compact:
+        elif _is_working_header(header_compact):
             name = "WORKING"
-        elif h1_compact == "PT":
+        elif _is_pt_header(header_compact):
             name = "PT"
         elif working_idx is not None and col_idx > working_idx and (pt_idx is None or col_idx < pt_idx):
-            mode = _normalize_mode_name(h2)
-            sub = _normalize_subheader(h3)
+            mode = ""
+            sub = ""
+            sub_source = ""
+
+            for label, candidate in [("h4", h4), ("h3", h3), ("h2", h2), ("h1", h1)]:
+                sub = _normalize_subheader(candidate)
+                if sub:
+                    sub_source = label
+                    break
+
+            mode_candidates = [h2, h1]
+            if sub_source == "h4":
+                mode_candidates = [h3, h2, h1]
+
+            for candidate in mode_candidates:
+                candidate_compact = _compact_text(candidate)
+                if (
+                    candidate
+                    and not _normalize_subheader(candidate)
+                    and not _is_consumer_header(candidate_compact)
+                    and not _is_output_header(candidate_compact)
+                    and not _is_input_header(candidate_compact)
+                    and not _is_qty_header(candidate_compact)
+                    and not _is_pt_header(candidate_compact)
+                ):
+                    mode = _normalize_mode_name(candidate)
+                    break
 
             # mode명이 첫 열에만 있고 옆 C.L / I.L 셀은 비어 있는 경우가 많으므로
             # 직전 mode를 옆 열들에 이어서 적용한다.
@@ -334,6 +463,30 @@ def _build_columns(raw_df: pd.DataFrame, header_row: int):
     return deduped, modes, final_mode_cols, final_cl_cols, final_il_cols
 
 
+def _find_data_start_row(raw_df: pd.DataFrame, header_row: int, columns: list[str]) -> int:
+    consumer_idx = columns.index("ELEC. CONSUMER") if "ELEC. CONSUMER" in columns else None
+    output_idx = columns.index("OUTPUT(KW)") if "OUTPUT(KW)" in columns else None
+    qty_idx = columns.index("Q'TY") if "Q'TY" in columns else None
+
+    if consumer_idx is None:
+        return header_row + 3
+
+    fallback_row = min(header_row + 3, len(raw_df))
+    for row_idx in range(header_row + 1, min(len(raw_df), header_row + 10)):
+        consumer_text = _clean_text(raw_df.iat[row_idx, consumer_idx])
+        consumer_compact = _compact_text(consumer_text)
+        if not consumer_text or _is_consumer_header(consumer_compact):
+            continue
+
+        output_value = pd.to_numeric(raw_df.iat[row_idx, output_idx], errors="coerce") if output_idx is not None else np.nan
+        qty_value = pd.to_numeric(raw_df.iat[row_idx, qty_idx], errors="coerce") if qty_idx is not None else np.nan
+
+        if pd.notna(output_value) or pd.notna(qty_value) or row_idx >= fallback_row:
+            return row_idx
+
+    return fallback_row
+
+
 # =========================================================
 # ELA Parsing / Calculation Core
 # =========================================================
@@ -369,7 +522,7 @@ def parse_ela_excel(file, il_df=2.0):
     header_row = _find_header_start(raw_df)
     columns, modes, mode_cols, cl_cols, il_cols = _build_columns(raw_df, header_row)
 
-    data_start_row = header_row + 3
+    data_start_row = _find_data_start_row(raw_df, header_row, columns)
     df = raw_df.iloc[data_start_row:].reset_index(drop=True).copy()
     df.columns = columns
 
@@ -400,6 +553,7 @@ def parse_ela_excel(file, il_df=2.0):
         r"SUB\s*TOTAL"
         r"|GRAND\s*TOTAL"
         r"|^TOTAL$"
+        r"|ELECTRIC\s*CONSUMER"
         r"|LOAD\s*ANALYSIS"
         r"|SHEET\s*:"
         r"|-\s*.*PART"
@@ -466,6 +620,7 @@ def parse_ela_excel(file, il_df=2.0):
     meta = {
         "target_sheet": target_sheet,
         "header_row": header_row,
+        "data_start_row": data_start_row,
         "consumer_col": consumer_col,
         "input_col": input_col,
         "output_col": output_col,
