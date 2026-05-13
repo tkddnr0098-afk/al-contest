@@ -375,9 +375,6 @@ def render_voyage_scenario_planner(
     mode_options = [str(mode) for mode in available_scenarios if str(mode).strip()]
     if not mode_options:
         mode_options = default_mode_options
-    mode_options = [str(mode) for mode in available_scenarios if str(mode).strip()]
-    if not mode_options:
-        mode_options = default_mode_options
     next_voyage_row_id = int(st.session_state.get("next_voyage_row_id", 0))
     if "voyage_rows" not in st.session_state:
         st.session_state["voyage_rows"] = [
@@ -385,10 +382,12 @@ def render_voyage_scenario_planner(
             for idx in range(4)
         ]
         next_voyage_row_id = 4
-    for row in st.session_state["voyage_rows"]:
+    for idx, row in enumerate(st.session_state["voyage_rows"]):
         if "id" not in row:
             row["id"] = next_voyage_row_id
             next_voyage_row_id += 1
+        if str(row.get("mode", "")).strip() not in mode_options:
+            row["mode"] = mode_options[0]
     st.session_state["next_voyage_row_id"] = next_voyage_row_id
     
     if st.button("＋ 행 추가", key="add_voyage_row"):
@@ -519,12 +518,19 @@ def render_voyage_scenario_planner(
 
         result_df["권장 기동 방식"] = recommendations
 
-        st.subheader("Top 3 개별 부하 (input load 기준)")
-        st.dataframe(result_df, use_container_width=True)
         st.subheader("발전기 용량 추천")
         render_generator_capacity_cards(recommendation_df, selected_option, generator_count_text)
-
+        
         if st.session_state.get("generator_capacity_option_applied", False):
+            st.subheader("Top 3 개별 부하 (input load 기준)")
+            st.dataframe(result_df, use_container_width=True)
+
+            st.subheader("Load Profile")
+            load_profile_df = scenario_df[["scenario", "total_load_kw"]].copy()
+            load_profile_df["scenario"] = load_profile_df["scenario"].astype(str)
+            load_profile_df["total_load_kw"] = pd.to_numeric(load_profile_df["total_load_kw"], errors="coerce").fillna(0.0)
+            st.line_chart(load_profile_df.set_index("scenario")["total_load_kw"])
+
             st.markdown("**발전기 대수별 비교**")
             peak_total_load_kw = _safe_float(selected_row["peak_total_load_kw"])
             application_df = build_generator_capacity_application_df(
@@ -533,6 +539,8 @@ def render_voyage_scenario_planner(
                 max_generators=4,
             )
             render_generator_capacity_application_table(application_df)
+        else:
+            st.info("발전기 용량 추천에서 '적용'을 누르면 Top 3 개별 부하와 Load Profile 그래프가 표시됩니다.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
