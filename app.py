@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 import re
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -14,48 +13,6 @@ from config import DEFAULT_INPUT_DATA
 
 
 st.set_page_config(page_title="Power System Scenario Profile Tool", layout="wide")
-
-
-def plot_load_profile_streamlit(scenario_df: pd.DataFrame) -> None:
-    x = scenario_df["scenario"].astype(str)
-    stacked_series = [
-        ("Continuous", "continuous_load_kw", "#1f77b4"),
-        ("Intermittent", "intermittent_load_kw", "#ff7f0e"),
-        ("Aux", "aux_load_kw", "#2ca02c"),
-        ("Propulsion", "propulsion_load_kw", "#d62728"),
-        ("ESS Charge", "ess_charge_kw", "#9467bd"),
-    ]
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    bottom = pd.Series([0.0] * len(scenario_df))
-    for label, col, color in stacked_series:
-        values = scenario_df[col].astype(float)
-        ax.bar(x, values, bottom=bottom, label=label, color=color)
-        bottom += values
-
-    total_load = bottom.copy()
-    max_total = float(total_load.max()) if len(total_load) else 0.0
-    y_max = max_total * 1.2 if max_total > 0 else 1.0
-    ax.set_ylim(0, y_max)
-
-    for idx, total in enumerate(total_load):
-        if total > 0:
-            ax.text(
-                idx,
-                total + (y_max * 0.01),
-                f"{total:.1f}",
-                ha="center",
-                va="bottom",
-                fontsize=11,
-                color="black",
-                fontweight="bold",
-            )
-
-    ax.set_title("Load Profile")
-    ax.set_ylabel("kW")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0)
-    fig.tight_layout()
-    st.pyplot(fig)
 
 
 def build_generator_capacity_recommendation_df(scenario_df: pd.DataFrame) -> pd.DataFrame:
@@ -372,6 +329,31 @@ def render_voyage_scenario_planner(
     scenario_df: pd.DataFrame,
     input_data: dict,
 ) -> None:
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] button[kind="secondary"] {
+            font-size: 1.05rem;
+            padding: 0.5rem 1rem;
+            font-weight: 600;
+        }
+        .full-width-button {
+            margin: 0 0.25rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="full-width-button">', unsafe_allow_html=True)
+    if st.button("선종별 duration_hr", key="vessel_type_duration_hr", use_container_width=True):
+        st.session_state["show_vessel_duration_buttons"] = not st.session_state.get("show_vessel_duration_buttons", False)
+
+    if st.session_state.get("show_vessel_duration_buttons", False):
+        vessel_cols = st.columns(10)
+        for i, vessel_col in enumerate(vessel_cols):
+            vessel_col.button("\u200b", key=f"vessel_duration_btn_{i}", use_container_width=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
     st.subheader("Voyage Planning")
     voyage_count = st.number_input(
         "일일 항차 횟수",
@@ -427,30 +409,6 @@ def render_voyage_scenario_planner(
         if col_action.button("－", key=f"remove_voyage_row_{idx}"):
             st.session_state["voyage_rows"].pop(idx)
             st.rerun()
-
-    st.markdown(
-        """
-        <style>
-        div[data-testid="stButton"] button[kind="secondary"] {
-            font-size: 1.05rem;
-            padding: 0.5rem 1rem;
-            font-weight: 600;
-        }
-        .full-width-button {
-            margin: 0 0.25rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown('<div class="full-width-button">', unsafe_allow_html=True)
-    if st.button("선종별 duration_hr", key="vessel_type_duration_hr", use_container_width=True):
-        st.session_state["show_vessel_duration_buttons"] = not st.session_state.get("show_vessel_duration_buttons", False)
-
-    if st.session_state.get("show_vessel_duration_buttons", False):
-        vessel_cols = st.columns(10)
-        for i, vessel_col in enumerate(vessel_cols):
-            vessel_col.button("\u200b", key=f"vessel_duration_btn_{i}", use_container_width=True)
 
     st.markdown("<div style='height: 1.25rem;'></div>", unsafe_allow_html=True)
     if st.button("발전기 및 ESS 배터리 적정 용량 산정", key="size_generator_ess", use_container_width=True):
@@ -561,6 +519,8 @@ def main() -> None:
     st.subheader("📂 ELA Upload")
 
     uploaded_file = st.file_uploader("Upload ELA Excel", type=["xlsx", "xls"])
+
+    st.caption("Scenario-based load profile prototype")
     il_df = st.number_input(
         "I.L Diversity Factor",
         min_value=1.0,
@@ -593,8 +553,6 @@ def main() -> None:
         st.session_state["adapter_handoff_df"] = pd.DataFrame()
         st.session_state["show_generator_sizing"] = False
         st.info("ELA 파일 업로드 전에는 Scenario Load 값이 0으로 표시됩니다.")
-    
-    st.caption("Scenario-based load profile prototype")
 
     input_data = build_editable_input_data()
 
@@ -605,8 +563,6 @@ def main() -> None:
         st.error(f"Calculation error: {exc}")
         st.stop()
 
-    st.subheader("Load Profile")
-    plot_load_profile_streamlit(scenario_df)
     available_scenarios = scenario_df["scenario"].astype(str).tolist() if "scenario" in scenario_df.columns else []
     render_voyage_scenario_planner(available_scenarios, scenario_df, input_data)
 
