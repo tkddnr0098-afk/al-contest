@@ -371,23 +371,34 @@ def render_voyage_scenario_planner(
     header_running_gen.markdown("**running_gen**")
 
     mode_options = ["NORMAL", "PORT_IN_OUT", "WORKING", "HARBOUR"]
+    next_voyage_row_id = int(st.session_state.get("next_voyage_row_id", 0))
     if "voyage_rows" not in st.session_state:
         st.session_state["voyage_rows"] = [
-            {"mode": mode_options[0], "duration_hr": 0.0, "running_gen": 0},
-            {"mode": mode_options[1], "duration_hr": 0.0, "running_gen": 0},
-            {"mode": mode_options[2], "duration_hr": 0.0, "running_gen": 0},
-            {"mode": mode_options[3], "duration_hr": 0.0, "running_gen": 0},
+            {"id": 0, "mode": mode_options[0], "duration_hr": 0.0, "running_gen": 0},
+            {"id": 1, "mode": mode_options[1], "duration_hr": 0.0, "running_gen": 0},
+            {"id": 2, "mode": mode_options[2], "duration_hr": 0.0, "running_gen": 0},
+            {"id": 3, "mode": mode_options[3], "duration_hr": 0.0, "running_gen": 0},
         ]
-
+        next_voyage_row_id = 4
+    for row in st.session_state["voyage_rows"]:
+        if "id" not in row:
+            row["id"] = next_voyage_row_id
+            next_voyage_row_id += 1
+    st.session_state["next_voyage_row_id"] = next_voyage_row_id
+    
     if st.button("＋ 행 추가", key="add_voyage_row"):
-        st.session_state["voyage_rows"].append({"mode": mode_options[0], "duration_hr": 0.0, "running_gen": 0})
+        row_id = int(st.session_state.get("next_voyage_row_id", 0))
+        st.session_state["voyage_rows"].append({"id": row_id, "mode": mode_options[0], "duration_hr": 0.0, "running_gen": 0})
+        st.session_state["next_voyage_row_id"] = row_id + 1
 
+    remove_row_id = None
     for idx, row in enumerate(st.session_state["voyage_rows"]):
+        row_id = int(row.get("id", idx))
         col_mode, col_duration, col_running_gen, col_action = st.columns([2, 1, 1, 0.5])
         row["mode"] = col_mode.text_input(
             "Mode",
             value=str(row.get("mode", "")),
-            key=f"voyage_mode_{idx}",
+            key=f"voyage_mode_{row_id}",
             label_visibility="collapsed",
         )
         row["duration_hr"] = col_duration.number_input(
@@ -395,7 +406,7 @@ def render_voyage_scenario_planner(
             min_value=0.0,
             value=float(row.get("duration_hr", 0.0)),
             step=0.1,
-            key=f"voyage_duration_{idx}",
+            key=f"voyage_duration_{row_id}",
             label_visibility="collapsed",
         )
         row["running_gen"] = int(col_running_gen.number_input(
@@ -403,13 +414,16 @@ def render_voyage_scenario_planner(
             min_value=0,
             value=int(row.get("running_gen", 0)),
             step=1,
-            key=f"voyage_running_gen_{idx}",
+            key=f"voyage_running_gen_{row_id}",
             label_visibility="collapsed",
         ))
-        if col_action.button("－", key=f"remove_voyage_row_{idx}"):
-            st.session_state["voyage_rows"].pop(idx)
-            st.rerun()
+        if col_action.button("－", key=f"remove_voyage_row_{row_id}"):
+            remove_row_id = row_id
 
+    if remove_row_id is not None:
+        st.session_state["voyage_rows"] = [row for row in st.session_state["voyage_rows"] if int(row.get("id", -1)) != remove_row_id]
+        st.rerun()
+        
     st.markdown("<div style='height: 1.25rem;'></div>", unsafe_allow_html=True)
     if st.button("발전기 및 ESS 배터리 적정 용량 산정", key="size_generator_ess", use_container_width=True):
         st.session_state["show_generator_sizing"] = True
