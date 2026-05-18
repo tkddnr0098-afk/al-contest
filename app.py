@@ -429,7 +429,7 @@ def render_voyage_scenario_planner(
             "duration_hr",
             min_value=0.0,
             value=float(row.get("duration_hr", 0.0)),
-            step=0.1,
+            step=1.0,
             key=f"voyage_duration_{row_id}",
             label_visibility="collapsed",
         )
@@ -608,6 +608,12 @@ def main() -> None:
 
     input_data = build_editable_input_data()
 
+    available_scenarios = [
+        str(scenario.get("name", ""))
+        for scenario in input_data.get("scenarios", [])
+        if str(scenario.get("name", "")).strip()
+    ]
+
     voyage_rows = st.session_state.get("voyage_rows", [])
     voyage_count = int(st.session_state.get("voyage_count", 1))
     voyage_profile_df = build_voyage_profile_dataframe(
@@ -628,7 +634,6 @@ def main() -> None:
         st.error(f"Calculation error: {exc}")
         st.stop()
 
-    available_scenarios = scenario_df["scenario"].astype(str).tolist() if "scenario" in scenario_df.columns else []
     render_voyage_scenario_planner(available_scenarios, scenario_df, input_data)
 
 
