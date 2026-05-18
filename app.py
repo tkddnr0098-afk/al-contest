@@ -9,6 +9,7 @@ import streamlit as st
 from ela_read import parse_ela_excel
 from adapters import build_input_data_from_dummy, build_input_data_from_ela_result
 from calc_engine import build_scenario_dataframe
+from voyage_scenario import build_voyage_profile_dataframe, build_calc_scenarios_from_voyage_profile
 from config import DEFAULT_INPUT_DATA
 
 
@@ -606,6 +607,19 @@ def main() -> None:
         st.info("ELA 파일 업로드 전에는 Scenario Load 값이 0으로 표시됩니다.")
 
     input_data = build_editable_input_data()
+
+    voyage_rows = st.session_state.get("voyage_rows", [])
+    voyage_count = int(st.session_state.get("voyage_count", 1))
+    voyage_profile_df = build_voyage_profile_dataframe(
+        mode_catalog_scenarios=input_data.get("scenarios", []),
+        voyage_rows=voyage_rows,
+        voyage_count=voyage_count,
+    )
+    if not voyage_profile_df.empty:
+        input_data["scenarios"] = build_calc_scenarios_from_voyage_profile(voyage_profile_df)
+        st.session_state["voyage_profile_df"] = voyage_profile_df
+    else:
+        st.session_state["voyage_profile_df"] = pd.DataFrame()
 
     try:
         scenario_df = build_scenario_dataframe(input_data)
