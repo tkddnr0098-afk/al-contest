@@ -314,8 +314,23 @@ def build_editable_input_data() -> dict:
         scenario["propulsion_load_kw"] = 0.0
 
     # ELA 결과가 있으면 default 값을 ELA 값으로 덮어쓰기
+    ela_payload = st.session_state.get("adapter_handoff_payload", None)
     ela_df = st.session_state.get("adapter_handoff_df", None)
-    ela_loaded = ela_df is not None and not ela_df.empty
+    if isinstance(ela_payload, dict):
+        payload_summary = ela_payload.get("summary")
+        if isinstance(payload_summary, pd.DataFrame):
+            ela_df = payload_summary
+        elif payload_summary is not None:
+            ela_df = pd.DataFrame(payload_summary)
+
+    if isinstance(ela_df, dict):
+        ela_df = pd.DataFrame(ela_df)
+    elif ela_df is None:
+        ela_df = pd.DataFrame()
+    elif not isinstance(ela_df, pd.DataFrame):
+        ela_df = pd.DataFrame(ela_df)
+
+    ela_loaded = not ela_df.empty
     if ela_loaded:
         try:
             input_data = build_input_data_from_ela_result(ela_df, input_data)
@@ -563,9 +578,13 @@ def main() -> None:
 
     if uploaded_file is not None:
         try:
-            _, main_df, _, meta, _, adapter_handoff_df = parse_ela_excel(uploaded_file, il_df=il_df)
+            _, main_df, _, meta, _, adapter_handoff_payload = parse_ela_excel(uploaded_file, il_df=il_df)
+            adapter_handoff_df = adapter_handoff_payload.get("summary", pd.DataFrame())
+            if not isinstance(adapter_handoff_df, pd.DataFrame):
+                adapter_handoff_df = pd.DataFrame(adapter_handoff_df)
 
             # 🔥 핵심: 세션에 저장
+            st.session_state["adapter_handoff_payload"] = adapter_handoff_payload
             st.session_state["adapter_handoff_df"] = adapter_handoff_df
             st.session_state["main_df"] = main_df
             st.session_state["ela_meta"] = meta
@@ -581,6 +600,7 @@ def main() -> None:
         except Exception as e:
             st.error(f"ELA parsing error: {e}")
     else:
+        st.session_state["adapter_handoff_payload"] = {}
         st.session_state["adapter_handoff_df"] = pd.DataFrame()
         st.session_state["show_generator_sizing"] = False
         st.info("ELA 파일 업로드 전에는 Scenario Load 값이 0으로 표시됩니다.")

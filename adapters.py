@@ -11,15 +11,19 @@ def build_input_data_from_dummy(default_input_data: dict[str, Any]) -> dict[str,
 
 
 def build_input_data_from_ela_result(
-    ela_summary_df: pd.DataFrame,
+    ela_summary_df: pd.DataFrame | dict[str, Any],
     base_input_data: dict[str, Any],
 ) -> dict[str, Any]:
     input_data = deepcopy(base_input_data)
-
+    
     # ----------------------------------
     # 🔹 1. 컬럼명 변환 (deck_mach → aux)
     # ----------------------------------
-    df = ela_summary_df.copy()
+    if isinstance(ela_summary_df, dict):
+        summary_df = ela_summary_df.get("summary", pd.DataFrame())
+        df = summary_df.copy() if isinstance(summary_df, pd.DataFrame) else pd.DataFrame(summary_df)
+    else:
+        df = ela_summary_df.copy()
 
     if "deck_machinery_load_kw" in df.columns:
         df["aux_load_kw"] = df["deck_machinery_load_kw"]

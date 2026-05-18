@@ -633,7 +633,17 @@ def parse_ela_excel(file, il_df=2.0):
         "il_df": il_df,
     }
 
-    return result, df, candidates, meta, mode_summary_df, adapter_handoff_df
+    ela_payload = {
+        "version": "1.0",
+        "summary": adapter_handoff_df.copy(),
+        "meta": {
+            "source": "parse_ela_excel",
+            "il_df": float(il_df),
+            "modes": list(modes),
+        },
+    }
+
+    return result, df, candidates, meta, mode_summary_df, ela_payload
 
 
 # =========================================================
@@ -653,6 +663,7 @@ def run_load_calculator():
             st.session_state.main_df = pd.DataFrame()
             st.session_state.ela_meta = {}
             st.session_state.mode_summary_df = pd.DataFrame()
+            st.session_state.adapter_handoff_payload = {}
             st.session_state.adapter_handoff_df = pd.DataFrame()
 
         st.session_state.uploaded_file = uploaded_file
@@ -671,19 +682,22 @@ def run_load_calculator():
     df = st.session_state.get("main_df", pd.DataFrame())
     meta = st.session_state.get("ela_meta", {})
     mode_summary_df = st.session_state.get("mode_summary_df", pd.DataFrame())
+    adapter_handoff_payload = st.session_state.get("adapter_handoff_payload", {})
     adapter_handoff_df = st.session_state.get("adapter_handoff_df", pd.DataFrame())
     consumer_col = meta.get("consumer_col")
     adapter_handoff_df = st.session_state.get("adapter_handoff_df", pd.DataFrame())
 
     if file_to_use:
         try:
-            result, df, candidates, meta, mode_summary_df, adapter_handoff_df = parse_ela_excel(file_to_use, il_df=il_df)
+            result, df, candidates, meta, mode_summary_df, adapter_handoff_payload = parse_ela_excel(file_to_use, il_df=il_df)
 
             st.session_state["main_df"] = df
             st.session_state["calculated_result"] = result
             st.session_state["ess_candidates"] = candidates
             st.session_state["ela_meta"] = meta
             st.session_state["mode_summary_df"] = mode_summary_df
+            st.session_state["adapter_handoff_payload"] = adapter_handoff_payload
+            adapter_handoff_df = adapter_handoff_payload.get("summary", pd.DataFrame())
             st.session_state["adapter_handoff_df"] = adapter_handoff_df
 
             consumer_col = meta.get("consumer_col")
